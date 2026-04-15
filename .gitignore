@@ -1,0 +1,17 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Angular
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+
+# Environment
+.env
+backend/.env
+
+# IDE
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "backend",
+    "backend/migration",
+]
+resolver = "2"
