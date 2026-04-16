@@ -1,0 +1,10 @@
+https://stars.localhost {
+    tls /Users/jdrake/RustroverProjects/stars-reborn/dev/certs/stars.localhost+3.pem /Users/jdrake/RustroverProjects/stars-reborn/dev/certs/stars.localhost+3-key.pem
+
+    # Backend API first
+    reverse_proxy /api/* localhost:3000
+
+    # Frontend app (Angular dev server)
+    reverse_proxy localhost:4200
+}
+
