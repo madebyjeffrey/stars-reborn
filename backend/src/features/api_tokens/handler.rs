@@ -26,11 +26,11 @@ pub struct TokenResponse {
 }
 
 impl TokenResponse {
-    pub fn from_model(m: model::Model, show_token: bool) -> Self {
+    pub fn from_model(m: model::Model, token: Option<String>) -> Self {
         Self {
             id: m.id.to_string(),
             name: m.name,
-            token: if show_token { Some(m.token) } else { None },
+            token,
             created_at: m.created_at.to_rfc3339(),
             expires_at: m.expires_at.map(|t| t.to_rfc3339()),
             last_used_at: m.last_used_at.map(|t| t.to_rfc3339()),
@@ -55,7 +55,7 @@ pub async fn list_tokens(
     Ok(Json(
         tokens
             .into_iter()
-            .map(|t| TokenResponse::from_model(t, false))
+            .map(|t| TokenResponse::from_model(t, None))
             .collect(),
     ))
 }
@@ -66,13 +66,14 @@ pub async fn create_token(
     Json(req): Json<CreateTokenRequest>,
 ) -> Result<(StatusCode, Json<TokenResponse>), AppError> {
     let token_str = hex::encode(rand::random::<[u8; 32]>());
+    let token_hash = super::hash_api_token(&token_str, &state.config.jwt_secret);
 
     let now = Utc::now().fixed_offset();
     let token = model::ActiveModel {
         id: Set(Uuid::new_v4()),
         user_id: Set(auth_user.user_id),
         name: Set(req.name),
-        token: Set(token_str),
+        token: Set(token_hash),
         created_at: Set(now),
         expires_at: Set(None),
         last_used_at: Set(None),
@@ -82,7 +83,7 @@ pub async fn create_token(
 
     Ok((
         StatusCode::CREATED,
-        Json(TokenResponse::from_model(created, true)),
+        Json(TokenResponse::from_model(created, Some(token_str))),
     ))
 }
 

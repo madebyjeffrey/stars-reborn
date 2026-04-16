@@ -38,6 +38,8 @@ async fn health_check() -> Json<serde_json::Value> {
 
 #[tokio::main]
 async fn main() {
+    let purge_plaintext_api_tokens = std::env::args().any(|arg| arg == "--purge-plaintext-api-tokens");
+
     dotenvy::dotenv().ok();
 
     tracing_subscriber::registry()
@@ -57,6 +59,21 @@ async fn main() {
     db::run_migrations(&db)
         .await
         .expect("Failed to run database migrations");
+
+    if purge_plaintext_api_tokens {
+        let removed = features::api_tokens::purge_non_hashed_tokens(&db)
+            .await
+            .expect("Failed to purge non-hashed API tokens");
+        tracing::info!(
+            "Purged {} non-hashed API token(s). Exiting as requested.",
+            removed
+        );
+        return;
+    }
+
+    features::api_tokens::assert_all_tokens_hashed(&db)
+        .await
+        .expect("Found non-hashed API tokens in database");
 
     let state = AppState {
         db,
