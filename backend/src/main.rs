@@ -2,6 +2,7 @@ mod config;
 mod db;
 mod error;
 mod features;
+mod jwt;
 mod middleware;
 
 use axum::{routing::get, Json, Router};

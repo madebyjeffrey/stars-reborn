@@ -4,27 +4,20 @@ use axum_extra::{
     TypedHeader,
 };
 use chrono::Utc;
-use jsonwebtoken::{decode, DecodingKey, Validation};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     error::AppError,
     features::api_tokens::{hash_api_token, model as api_token_model},
+    jwt::{decode_access_token, Claims},
     AppState,
 };
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Claims {
-    pub sub: String,
-    pub exp: usize,
-    pub iat: usize,
-}
 
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub user_id: Uuid,
+    #[allow(dead_code)]
     pub claims: Claims,
 }
 
@@ -42,11 +35,7 @@ impl FromRequestParts<AppState> for AuthUser {
 
         let bearer_token = bearer.token();
 
-        let token_data = decode::<Claims>(
-            bearer_token,
-            &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
-            &Validation::default(),
-        );
+        let token_data = decode_access_token(bearer_token, &state.config.jwt_secret);
 
         if let Ok(token_data) = token_data {
             let user_id =
@@ -75,11 +64,7 @@ impl FromRequestParts<AppState> for AuthUser {
 
         Ok(AuthUser {
             user_id: token.user_id,
-            claims: Claims {
-                sub: token.user_id.to_string(),
-                exp: usize::MAX,
-                iat: now.timestamp() as usize,
-            },
+            claims: Claims::for_api_token(token.user_id.to_string(), now.timestamp() as usize),
         })
     }
 }

@@ -15,33 +15,10 @@ use uuid::Uuid;
 use crate::{
     error::AppError,
     features::users::model::{self, Entity as UserEntity},
+    jwt::issue_access_token,
     AppState,
 };
 
-fn create_jwt(user_id: &str, secret: &str) -> Result<String, jsonwebtoken::errors::Error> {
-    use jsonwebtoken::{encode, EncodingKey, Header};
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Serialize, Deserialize)]
-    struct Claims {
-        sub: String,
-        exp: usize,
-        iat: usize,
-    }
-
-    let now = chrono::Utc::now().timestamp() as usize;
-    let claims = Claims {
-        sub: user_id.to_string(),
-        exp: now + 86400 * 7,
-        iat: now,
-    };
-
-    encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    )
-}
 
 pub async fn discord_login(
     State(state): State<AppState>,
@@ -167,7 +144,7 @@ pub async fn discord_callback(
         })?
     };
 
-    let token = create_jwt(&user.id.to_string(), &state.config.jwt_secret)
+    let token = issue_access_token(&user.id.to_string(), &state.config.jwt_secret)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create JWT: {}", e)))?;
 
     // Set JWT as HTTP-only cookie instead of query parameter to prevent token leakage

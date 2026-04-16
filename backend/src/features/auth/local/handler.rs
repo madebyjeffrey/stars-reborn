@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::{
     error::AppError,
     features::users::model::{self, Entity as UserEntity},
+    jwt::issue_access_token,
     AppState,
 };
 
@@ -27,30 +28,6 @@ fn map_user_unique_constraint_error(err: sea_orm::DbErr) -> AppError {
     AppError::Database(err)
 }
 
-fn create_jwt(user_id: &str, secret: &str) -> Result<String, jsonwebtoken::errors::Error> {
-    use jsonwebtoken::{encode, EncodingKey, Header};
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Serialize, Deserialize)]
-    struct Claims {
-        sub: String,
-        exp: usize,
-        iat: usize,
-    }
-
-    let now = chrono::Utc::now().timestamp() as usize;
-    let claims = Claims {
-        sub: user_id.to_string(),
-        exp: now + 86400 * 7, // 7 days
-        iat: now,
-    };
-
-    encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    )
-}
 
 #[derive(Deserialize)]
 pub struct RegisterRequest {
@@ -117,7 +94,7 @@ pub async fn register(
         .await
         .map_err(map_user_unique_constraint_error)?;
 
-    let token = create_jwt(&created.id.to_string(), &state.config.jwt_secret)
+    let token = issue_access_token(&created.id.to_string(), &state.config.jwt_secret)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create JWT: {}", e)))?;
 
     Ok(Json(AuthResponse {
@@ -154,7 +131,7 @@ pub async fn login(
         return Err(AppError::Auth("Invalid username or password".to_string()));
     }
 
-    let token = create_jwt(&user.id.to_string(), &state.config.jwt_secret)
+    let token = issue_access_token(&user.id.to_string(), &state.config.jwt_secret)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create JWT: {}", e)))?;
 
     Ok(Json(AuthResponse {
