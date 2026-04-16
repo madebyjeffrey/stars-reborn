@@ -1,4 +1,5 @@
 use axum::{extract::State, Json};
+use chrono::Utc;
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -95,6 +96,8 @@ pub async fn update_me(
         NullableFieldUpdate::Clear => active.email = Set(None),
         NullableFieldUpdate::Set(email) => active.email = Set(Some(email)),
     }
+
+    active.updated_at = Set(Utc::now().fixed_offset());
 
     let updated = active.update(&state.db).await?;
 
