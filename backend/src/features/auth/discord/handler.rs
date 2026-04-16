@@ -143,7 +143,8 @@ pub async fn discord_callback(
         user
     } else {
         let now = Utc::now().fixed_offset();
-        let username = format!("discord_{}", &discord_user.username);
+        // Use Discord ID as username to guarantee uniqueness
+        let username = format!("discord_{}", &discord_user.id);
         let new_user = model::ActiveModel {
             id: Set(Uuid::new_v4()),
             username: Set(username),
@@ -155,7 +156,15 @@ pub async fn discord_callback(
             created_at: Set(now),
             updated_at: Set(now),
         };
-        new_user.insert(&state.db).await?
+        new_user.insert(&state.db).await.map_err(|e| {
+            // Handle unique constraint violations gracefully
+            if let sea_orm::DbErr::Custom(msg) = &e {
+                if msg.contains("unique constraint") || msg.contains("UNIQUE constraint failed") {
+                    return AppError::Conflict("Unable to create Discord user: username already exists".to_string());
+                }
+            }
+            AppError::Database(e)
+        })?
     };
 
     let token = create_jwt(&user.id.to_string(), &state.config.jwt_secret)

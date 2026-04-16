@@ -87,7 +87,15 @@ pub async fn register(
         updated_at: Set(now),
     };
 
-    let created = user.insert(&state.db).await?;
+    let created = user.insert(&state.db).await.map_err(|e| {
+        // Handle unique constraint violations gracefully
+        if let sea_orm::DbErr::Custom(msg) = &e {
+            if msg.contains("unique constraint") || msg.contains("UNIQUE constraint failed") {
+                return AppError::Conflict("Username already taken".to_string());
+            }
+        }
+        AppError::Database(e)
+    })?;
 
     let token = create_jwt(&created.id.to_string(), &state.config.jwt_secret)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create JWT: {}", e)))?;
