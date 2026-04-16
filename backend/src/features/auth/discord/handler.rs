@@ -60,6 +60,77 @@ struct DiscordUser {
     email: Option<String>,
 }
 
+fn apply_discord_profile_updates(
+    active: &mut model::ActiveModel,
+    discord_id: String,
+    discord_username: String,
+    discord_avatar: Option<String>,
+    discord_email: Option<String>,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) {
+    active.discord_id = Set(Some(discord_id));
+    active.discord_username = Set(Some(discord_username));
+    active.discord_avatar = Set(discord_avatar);
+    active.email = Set(discord_email);
+    active.updated_at = Set(now);
+}
+
+async fn upsert_discord_user(
+    db: &sea_orm::DatabaseConnection,
+    discord_user: DiscordUser,
+) -> Result<model::Model, AppError> {
+    let discord_id = discord_user.id;
+    let discord_username = discord_user.username;
+    let discord_avatar = discord_user.avatar;
+    let discord_email = discord_user.email;
+
+    let existing = UserEntity::find()
+        .filter(model::Column::DiscordId.eq(&discord_id))
+        .one(db)
+        .await?;
+
+    if let Some(user) = existing {
+        let now = Utc::now().fixed_offset();
+        let mut active: model::ActiveModel = user.into();
+        apply_discord_profile_updates(
+            &mut active,
+            discord_id,
+            discord_username,
+            discord_avatar,
+            discord_email,
+            now,
+        );
+        return active.update(db).await.map_err(AppError::from);
+    }
+
+    let now = Utc::now().fixed_offset();
+    // Use Discord ID as username to guarantee uniqueness
+    let username = format!("discord_{}", &discord_id);
+    let new_user = model::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        username: Set(username),
+        email: Set(discord_email),
+        password_hash: Set(None),
+        discord_id: Set(Some(discord_id)),
+        discord_username: Set(Some(discord_username)),
+        discord_avatar: Set(discord_avatar),
+        created_at: Set(now),
+        updated_at: Set(now),
+    };
+
+    new_user.insert(db).await.map_err(|e| {
+        // Handle unique constraint violations gracefully
+        if let sea_orm::DbErr::Custom(msg) = &e {
+            if msg.contains("unique constraint") || msg.contains("UNIQUE constraint failed") {
+                return AppError::Conflict(
+                    "Unable to create Discord user: username already exists".to_string(),
+                );
+            }
+        }
+        AppError::Database(e)
+    })
+}
+
 fn validate_csrf_state(
     jar: PrivateCookieJar,
     provided_state: Option<&str>,
@@ -115,38 +186,7 @@ pub async fn discord_callback(
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse Discord user: {}", e)))?;
 
-    let existing = UserEntity::find()
-        .filter(model::Column::DiscordId.eq(&discord_user.id))
-        .one(&state.db)
-        .await?;
-
-    let user = if let Some(user) = existing {
-        user
-    } else {
-        let now = Utc::now().fixed_offset();
-        // Use Discord ID as username to guarantee uniqueness
-        let username = format!("discord_{}", &discord_user.id);
-        let new_user = model::ActiveModel {
-            id: Set(Uuid::new_v4()),
-            username: Set(username),
-            email: Set(discord_user.email),
-            password_hash: Set(None),
-            discord_id: Set(Some(discord_user.id)),
-            discord_username: Set(Some(discord_user.username)),
-            discord_avatar: Set(discord_user.avatar),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-        new_user.insert(&state.db).await.map_err(|e| {
-            // Handle unique constraint violations gracefully
-            if let sea_orm::DbErr::Custom(msg) = &e {
-                if msg.contains("unique constraint") || msg.contains("UNIQUE constraint failed") {
-                    return AppError::Conflict("Unable to create Discord user: username already exists".to_string());
-                }
-            }
-            AppError::Database(e)
-        })?
-    };
+    let user = upsert_discord_user(&state.db, discord_user).await?;
 
     let token = issue_access_token(&user.id.to_string(), &state.config.jwt_secret)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create JWT: {}", e)))?;
@@ -169,9 +209,13 @@ pub async fn discord_callback(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_csrf_state;
+    use super::{apply_discord_profile_updates, validate_csrf_state};
     use crate::error::AppError;
+    use crate::features::users::model;
     use axum_extra::extract::cookie::{Cookie, Key, PrivateCookieJar};
+    use chrono::Utc;
+    use sea_orm::ActiveValue;
+    use uuid::Uuid;
 
     fn new_private_jar() -> PrivateCookieJar {
         PrivateCookieJar::new(Key::generate())
@@ -220,5 +264,66 @@ mod tests {
             .expect("matching state should pass");
 
         assert!(jar.get("oauth_csrf").is_none());
+    }
+
+    fn user_model(
+        id: Uuid,
+        username: &str,
+        email: Option<&str>,
+        discord_id: Option<&str>,
+        discord_username: Option<&str>,
+        discord_avatar: Option<&str>,
+        updated_at: chrono::DateTime<chrono::FixedOffset>,
+    ) -> model::Model {
+        model::Model {
+            id,
+            username: username.to_string(),
+            email: email.map(str::to_string),
+            password_hash: None,
+            discord_id: discord_id.map(str::to_string),
+            discord_username: discord_username.map(str::to_string),
+            discord_avatar: discord_avatar.map(str::to_string),
+            created_at: updated_at,
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn apply_discord_profile_updates_refreshes_existing_profile_fields() {
+        let user_id = Uuid::new_v4();
+        let old_updated_at = Utc::now().fixed_offset();
+        let new_updated_at = old_updated_at + chrono::Duration::minutes(5);
+
+        let existing_user_model = user_model(
+            user_id,
+            "discord_12345",
+            Some("old@starsreborn.dev"),
+            Some("12345"),
+            Some("old_name"),
+            Some("old_avatar"),
+            old_updated_at,
+        );
+        let mut active: model::ActiveModel = existing_user_model.into();
+
+        apply_discord_profile_updates(
+            &mut active,
+            "12345".to_string(),
+            "new_name".to_string(),
+            Some("new_avatar".to_string()),
+            Some("new@starsreborn.dev".to_string()),
+            new_updated_at,
+        );
+
+        assert_eq!(active.email, ActiveValue::Set(Some("new@starsreborn.dev".to_string())));
+        assert_eq!(active.discord_id, ActiveValue::Set(Some("12345".to_string())));
+        assert_eq!(
+            active.discord_username,
+            ActiveValue::Set(Some("new_name".to_string()))
+        );
+        assert_eq!(
+            active.discord_avatar,
+            ActiveValue::Set(Some("new_avatar".to_string()))
+        );
+        assert_eq!(active.updated_at, ActiveValue::Set(new_updated_at));
     }
 }

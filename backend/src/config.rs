@@ -4,6 +4,7 @@ use axum::http::HeaderValue;
 #[derive(Clone, Debug)]
 pub struct Config {
     pub database_url: String,
+    pub test_database_url: Option<String>,
     pub jwt_secret: String,
     pub discord_client_id: String,
     pub discord_client_secret: String,
@@ -15,6 +16,25 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn resolve_test_database_url_from_env() -> anyhow::Result<String> {
+        if let Some(url) = env::var("TEST_DATABASE_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        {
+            return Ok(url);
+        }
+
+        env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!(
+            "DATABASE_URL must be set (or provide TEST_DATABASE_URL for integration tests)"
+        ))
+    }
+
+    pub fn effective_test_database_url(&self) -> &str {
+        self.test_database_url
+            .as_deref()
+            .unwrap_or(&self.database_url)
+    }
+
     pub fn from_env() -> anyhow::Result<Self> {
         let frontend_url = env::var("FRONTEND_URL")
             .unwrap_or_else(|_| "http://localhost:4200".to_string());
@@ -49,6 +69,9 @@ impl Config {
         Ok(Self {
             database_url: env::var("DATABASE_URL")
                 .map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?,
+            test_database_url: env::var("TEST_DATABASE_URL")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
             jwt_secret,
             discord_client_id: env::var("DISCORD_CLIENT_ID").unwrap_or_default(),
             discord_client_secret: env::var("DISCORD_CLIENT_SECRET").unwrap_or_default(),
@@ -83,8 +106,9 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    const CONFIG_KEYS: [&str; 8] = [
+    const CONFIG_KEYS: [&str; 9] = [
         "DATABASE_URL",
+        "TEST_DATABASE_URL",
         "JWT_SECRET",
         "FRONTEND_URL",
         "SERVER_PORT",
@@ -225,5 +249,71 @@ mod tests {
         assert_eq!(cfg.jwt_secret, "0123456789abcdef0123456789abcdef");
         assert_eq!(cfg.server_port, 3000);
         assert_eq!(cfg.frontend_url, "http://localhost:4200");
+        assert_eq!(
+            cfg.effective_test_database_url(),
+            "postgres://postgres:postgres@localhost/stars_reborn_test"
+        );
+    }
+
+    #[test]
+    fn effective_test_database_url_uses_override_when_present() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        set_required_env("0123456789abcdef0123456789abcdef");
+        env::set_var(
+            "TEST_DATABASE_URL",
+            "postgres://postgres:postgres@localhost/stars_reborn_test_override",
+        );
+
+        let cfg = Config::from_env().expect("valid config should parse");
+        assert_eq!(
+            cfg.effective_test_database_url(),
+            "postgres://postgres:postgres@localhost/stars_reborn_test_override"
+        );
+    }
+
+    #[test]
+    fn effective_test_database_url_falls_back_when_override_is_blank() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        set_required_env("0123456789abcdef0123456789abcdef");
+        env::set_var("TEST_DATABASE_URL", "   ");
+
+        let cfg = Config::from_env().expect("valid config should parse");
+        assert_eq!(
+            cfg.effective_test_database_url(),
+            "postgres://postgres:postgres@localhost/stars_reborn_test"
+        );
+    }
+
+    #[test]
+    fn resolve_test_database_url_from_env_prefers_test_database_url() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        env::set_var("DATABASE_URL", "postgres://postgres:postgres@localhost/app_db");
+        env::set_var(
+            "TEST_DATABASE_URL",
+            "postgres://postgres:postgres@localhost/test_db",
+        );
+
+        let resolved = Config::resolve_test_database_url_from_env()
+            .expect("test database URL should resolve");
+        assert_eq!(resolved, "postgres://postgres:postgres@localhost/test_db");
+    }
+
+    #[test]
+    fn resolve_test_database_url_from_env_falls_back_to_database_url() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        env::set_var("DATABASE_URL", "postgres://postgres:postgres@localhost/app_db");
+        env::set_var("TEST_DATABASE_URL", "   ");
+
+        let resolved = Config::resolve_test_database_url_from_env()
+            .expect("database URL fallback should resolve");
+        assert_eq!(resolved, "postgres://postgres:postgres@localhost/app_db");
     }
 }
