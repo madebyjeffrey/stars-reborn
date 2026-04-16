@@ -1,9 +1,9 @@
-mod config;
-mod db;
-mod error;
-mod features;
-mod jwt;
-mod middleware;
+pub mod config;
+pub mod db;
+pub mod error;
+pub mod features;
+pub mod jwt;
+pub mod middleware;
 
 use axum::{routing::get, Json, Router};
 use sea_orm::DatabaseConnection;
