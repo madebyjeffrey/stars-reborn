@@ -53,7 +53,8 @@ impl FromRequestParts<AppState> for AuthUser {
             });
         }
 
-        let token_hash = hash_api_token(bearer_token, &state.config.jwt_secret);
+        let token_hash = hash_api_token(bearer_token, &state.config.api_token_pepper);
+
         let token = api_token_model::Entity::find()
             .filter(api_token_model::Column::Token.eq(token_hash))
             .one(&state.db)

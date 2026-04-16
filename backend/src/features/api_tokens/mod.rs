@@ -103,4 +103,5 @@ mod tests {
         assert!(!is_sha256_hex(&"a".repeat(63)));
         assert!(!is_sha256_hex(&"g".repeat(64)));
     }
+
 }

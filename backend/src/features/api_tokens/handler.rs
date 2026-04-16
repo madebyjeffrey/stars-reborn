@@ -66,7 +66,7 @@ pub async fn create_token(
     Json(req): Json<CreateTokenRequest>,
 ) -> Result<(StatusCode, Json<TokenResponse>), AppError> {
     let token_str = hex::encode(rand::random::<[u8; 32]>());
-    let token_hash = super::hash_api_token(&token_str, &state.config.jwt_secret);
+    let token_hash = super::hash_api_token(&token_str, &state.config.api_token_pepper);
 
     let now = Utc::now().fixed_offset();
     let token = model::ActiveModel {

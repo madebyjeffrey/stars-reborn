@@ -7,6 +7,7 @@ pub struct Config {
     pub test_database_url: Option<String>,
     pub jwt_secret: String,
     pub cookie_secure: bool,
+    pub api_token_pepper: String,
     pub discord_client_id: String,
     pub discord_client_secret: String,
     pub discord_redirect_url: String,
@@ -85,6 +86,12 @@ impl Config {
 
         let cookie_secure = Self::parse_bool_env("COOKIE_SECURE", true)?;
 
+        let api_token_pepper = env::var("API_TOKEN_PEPPER")
+            .map_err(|_| anyhow::anyhow!("API_TOKEN_PEPPER must be set"))?;
+        if api_token_pepper.trim().is_empty() {
+            return Err(anyhow::anyhow!("API_TOKEN_PEPPER must not be empty"));
+        }
+
         Ok(Self {
             database_url: env::var("DATABASE_URL")
                 .map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?,
@@ -93,6 +100,7 @@ impl Config {
                 .filter(|value| !value.trim().is_empty()),
             jwt_secret,
             cookie_secure,
+            api_token_pepper,
             discord_client_id: env::var("DISCORD_CLIENT_ID").unwrap_or_default(),
             discord_client_secret: env::var("DISCORD_CLIENT_SECRET").unwrap_or_default(),
             discord_redirect_url: env::var("DISCORD_REDIRECT_URL").unwrap_or_else(|_| {
@@ -126,11 +134,12 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    const CONFIG_KEYS: [&str; 10] = [
+    const CONFIG_KEYS: [&str; 11] = [
         "DATABASE_URL",
         "TEST_DATABASE_URL",
         "JWT_SECRET",
         "COOKIE_SECURE",
+        "API_TOKEN_PEPPER",
         "FRONTEND_URL",
         "SERVER_PORT",
         "DISCORD_CLIENT_ID",
@@ -168,6 +177,7 @@ mod tests {
     fn set_required_env(jwt_secret: &str) {
         env::set_var("DATABASE_URL", "postgres://postgres:postgres@localhost/stars_reborn_test");
         env::set_var("JWT_SECRET", jwt_secret);
+        env::set_var("API_TOKEN_PEPPER", "separate-api-token-pepper-value");
     }
 
     #[test]
@@ -177,6 +187,7 @@ mod tests {
 
         env::remove_var("DATABASE_URL");
         env::set_var("JWT_SECRET", "0123456789abcdef0123456789abcdef");
+        env::set_var("API_TOKEN_PEPPER", "separate-api-token-pepper-value");
 
         let err = Config::from_env().expect_err("missing DATABASE_URL should fail");
         assert!(err.to_string().contains("DATABASE_URL must be set"));
@@ -269,6 +280,7 @@ mod tests {
         let cfg = Config::from_env().expect("valid config should parse");
         assert_eq!(cfg.jwt_secret, "0123456789abcdef0123456789abcdef");
         assert!(cfg.cookie_secure);
+        assert_eq!(cfg.api_token_pepper, "separate-api-token-pepper-value");
         assert_eq!(cfg.server_port, 3000);
         assert_eq!(cfg.frontend_url, "http://localhost:4200");
         assert_eq!(
@@ -299,6 +311,29 @@ mod tests {
 
         let err = Config::from_env().expect_err("invalid COOKIE_SECURE should fail");
         assert!(err.to_string().contains("COOKIE_SECURE must be a boolean"));
+    }
+
+    #[test]
+    fn from_env_uses_api_token_pepper_when_set() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        set_required_env("0123456789abcdef0123456789abcdef");
+
+        let cfg = Config::from_env().expect("valid config should parse");
+        assert_eq!(cfg.api_token_pepper, "separate-api-token-pepper-value");
+    }
+
+    #[test]
+    fn from_env_fails_when_api_token_pepper_missing() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        set_required_env("0123456789abcdef0123456789abcdef");
+        env::remove_var("API_TOKEN_PEPPER");
+
+        let err = Config::from_env().expect_err("missing API_TOKEN_PEPPER should fail");
+        assert!(err.to_string().contains("API_TOKEN_PEPPER must be set"));
     }
 
     #[test]
