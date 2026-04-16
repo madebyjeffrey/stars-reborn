@@ -13,6 +13,20 @@ use crate::{
 use super::super::super::users::handler::UserResponse;
 use super::password::{hash_password, verify_password};
 
+fn map_user_unique_constraint_error(err: sea_orm::DbErr) -> AppError {
+    let msg = err.to_string().to_lowercase();
+
+    if msg.contains("users_username_key") || (msg.contains("username") && msg.contains("unique")) {
+        return AppError::Conflict("Username already taken".to_string());
+    }
+
+    if msg.contains("users_email_key") || (msg.contains("email") && msg.contains("unique")) {
+        return AppError::Conflict("Email already in use".to_string());
+    }
+
+    AppError::Database(err)
+}
+
 fn create_jwt(user_id: &str, secret: &str) -> Result<String, jsonwebtoken::errors::Error> {
     use jsonwebtoken::{encode, EncodingKey, Header};
     use serde::{Deserialize, Serialize};
@@ -61,7 +75,18 @@ pub async fn register(
         .await?;
 
     if existing.is_some() {
-        return Err(AppError::BadRequest("Username already taken".to_string()));
+        return Err(AppError::Conflict("Username already taken".to_string()));
+    }
+
+    if let Some(email) = req.email.as_deref() {
+        let existing_email = UserEntity::find()
+            .filter(model::Column::Email.eq(email))
+            .one(&state.db)
+            .await?;
+
+        if existing_email.is_some() {
+            return Err(AppError::Conflict("Email already in use".to_string()));
+        }
     }
 
     if req.password.len() < 8 {
@@ -87,15 +112,10 @@ pub async fn register(
         updated_at: Set(now),
     };
 
-    let created = user.insert(&state.db).await.map_err(|e| {
-        // Handle unique constraint violations gracefully
-        if let sea_orm::DbErr::Custom(msg) = &e {
-            if msg.contains("unique constraint") || msg.contains("UNIQUE constraint failed") {
-                return AppError::Conflict("Username already taken".to_string());
-            }
-        }
-        AppError::Database(e)
-    })?;
+    let created = user
+        .insert(&state.db)
+        .await
+        .map_err(map_user_unique_constraint_error)?;
 
     let token = create_jwt(&created.id.to_string(), &state.config.jwt_secret)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create JWT: {}", e)))?;
