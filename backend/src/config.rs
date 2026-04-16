@@ -28,11 +28,28 @@ impl Config {
             .parse::<u16>()
             .map_err(|err| anyhow::anyhow!("SERVER_PORT must be a valid u16: {err}"))?;
 
+        let jwt_secret = env::var("JWT_SECRET")
+            .map_err(|_| anyhow::anyhow!("JWT_SECRET must be set"))?;
+
+        if jwt_secret.trim().is_empty() {
+            return Err(anyhow::anyhow!("JWT_SECRET must not be empty"));
+        }
+
+        if jwt_secret == "change-me-in-production" {
+            return Err(anyhow::anyhow!(
+                "JWT_SECRET is using an insecure placeholder value; set a strong random secret"
+            ));
+        }
+
+        // Require a reasonably strong secret length to reduce weak-key misconfiguration.
+        if jwt_secret.len() < 32 {
+            return Err(anyhow::anyhow!("JWT_SECRET must be at least 32 characters long"));
+        }
+
         Ok(Self {
             database_url: env::var("DATABASE_URL")
                 .map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?,
-            jwt_secret: env::var("JWT_SECRET")
-                .unwrap_or_else(|_| "change-me-in-production".to_string()),
+            jwt_secret,
             discord_client_id: env::var("DISCORD_CLIENT_ID").unwrap_or_default(),
             discord_client_secret: env::var("DISCORD_CLIENT_SECRET").unwrap_or_default(),
             discord_redirect_url: env::var("DISCORD_REDIRECT_URL").unwrap_or_else(|_| {
@@ -43,5 +60,170 @@ impl Config {
             server_host: env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             server_port,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+    use std::{
+        env,
+        sync::{Mutex, MutexGuard, OnceLock},
+    };
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn env_lock() -> &'static Mutex<()> {
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn acquire_env_lock() -> MutexGuard<'static, ()> {
+        env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    const CONFIG_KEYS: [&str; 8] = [
+        "DATABASE_URL",
+        "JWT_SECRET",
+        "FRONTEND_URL",
+        "SERVER_PORT",
+        "DISCORD_CLIENT_ID",
+        "DISCORD_CLIENT_SECRET",
+        "DISCORD_REDIRECT_URL",
+        "SERVER_HOST",
+    ];
+
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn capture(keys: &[&'static str]) -> Self {
+            let saved = keys
+                .iter()
+                .map(|key| (*key, env::var(key).ok()))
+                .collect::<Vec<_>>();
+            Self { saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.saved {
+                if let Some(v) = value {
+                    env::set_var(key, v);
+                } else {
+                    env::remove_var(key);
+                }
+            }
+        }
+    }
+
+    fn set_required_env(jwt_secret: &str) {
+        env::set_var("DATABASE_URL", "postgres://postgres:postgres@localhost/stars_reborn_test");
+        env::set_var("JWT_SECRET", jwt_secret);
+    }
+
+    #[test]
+    fn from_env_fails_when_database_url_is_missing() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        env::remove_var("DATABASE_URL");
+        env::set_var("JWT_SECRET", "0123456789abcdef0123456789abcdef");
+
+        let err = Config::from_env().expect_err("missing DATABASE_URL should fail");
+        assert!(err.to_string().contains("DATABASE_URL must be set"));
+    }
+
+    #[test]
+    fn from_env_fails_when_jwt_secret_is_missing() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        env::set_var("DATABASE_URL", "postgres://postgres:postgres@localhost/stars_reborn_test");
+        env::remove_var("JWT_SECRET");
+
+        let err = Config::from_env().expect_err("missing JWT_SECRET should fail");
+        assert!(err.to_string().contains("JWT_SECRET must be set"));
+    }
+
+    #[test]
+    fn from_env_fails_when_jwt_secret_is_empty_or_whitespace() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        set_required_env("   ");
+
+        let err = Config::from_env().expect_err("whitespace JWT_SECRET should fail");
+        assert!(err.to_string().contains("JWT_SECRET must not be empty"));
+    }
+
+    #[test]
+    fn from_env_fails_when_jwt_secret_is_too_short() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        set_required_env("too-short");
+
+        let err = Config::from_env().expect_err("short JWT_SECRET should fail");
+        assert!(
+            err.to_string()
+                .contains("JWT_SECRET must be at least 32 characters long")
+        );
+    }
+
+    #[test]
+    fn from_env_fails_when_jwt_secret_is_known_placeholder() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        set_required_env("change-me-in-production");
+
+        let err = Config::from_env().expect_err("placeholder JWT_SECRET should fail");
+        assert!(
+            err.to_string().contains("JWT_SECRET is using an insecure placeholder value")
+        );
+    }
+
+    #[test]
+    fn from_env_fails_when_server_port_is_invalid() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        set_required_env("0123456789abcdef0123456789abcdef");
+        env::set_var("SERVER_PORT", "not-a-number");
+
+        let err = Config::from_env().expect_err("invalid SERVER_PORT should fail");
+        assert!(err.to_string().contains("SERVER_PORT must be a valid u16"));
+    }
+
+    #[test]
+    fn from_env_fails_when_frontend_url_is_not_a_valid_header_value() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        set_required_env("0123456789abcdef0123456789abcdef");
+        env::set_var("FRONTEND_URL", "http://localhost:4200\nmalicious");
+
+        let err = Config::from_env().expect_err("invalid FRONTEND_URL should fail");
+        assert!(
+            err.to_string()
+                .contains("Invalid FRONTEND_URL for CORS allow_origin")
+        );
+    }
+
+    #[test]
+    fn from_env_succeeds_with_strong_jwt_secret() {
+        let _lock = acquire_env_lock();
+        let _guard = EnvGuard::capture(&CONFIG_KEYS);
+
+        set_required_env("0123456789abcdef0123456789abcdef");
+
+        let cfg = Config::from_env().expect("valid config should parse");
+        assert_eq!(cfg.jwt_secret, "0123456789abcdef0123456789abcdef");
+        assert_eq!(cfg.server_port, 3000);
+        assert_eq!(cfg.frontend_url, "http://localhost:4200");
     }
 }

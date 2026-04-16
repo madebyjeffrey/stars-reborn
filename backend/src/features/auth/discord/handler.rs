@@ -60,28 +60,32 @@ struct DiscordUser {
     email: Option<String>,
 }
 
-pub async fn discord_callback(
-    State(state): State<AppState>,
+fn validate_csrf_state(
     jar: PrivateCookieJar,
-    Query(params): Query<CallbackQuery>,
-) -> Result<(PrivateCookieJar, Redirect), AppError> {
-    // Validate CSRF token before doing anything else
+    provided_state: Option<&str>,
+) -> Result<PrivateCookieJar, AppError> {
     let csrf_cookie = jar
         .get("oauth_csrf")
         .ok_or_else(|| AppError::Auth("Missing CSRF cookie".to_string()))?;
 
-    let expected = csrf_cookie.value().to_string();
-    let provided = params
-        .state
-        .as_deref()
+    let expected = csrf_cookie.value();
+    let provided = provided_state
         .ok_or_else(|| AppError::Auth("Missing state parameter".to_string()))?;
 
     if expected != provided {
         return Err(AppError::Auth("CSRF token mismatch".to_string()));
     }
 
-    // Consume the CSRF cookie so it cannot be replayed
-    let jar = jar.remove(Cookie::from("oauth_csrf"));
+    // Consume the CSRF cookie so it cannot be replayed.
+    Ok(jar.remove(Cookie::from("oauth_csrf")))
+}
+
+pub async fn discord_callback(
+    State(state): State<AppState>,
+    jar: PrivateCookieJar,
+    Query(params): Query<CallbackQuery>,
+) -> Result<(PrivateCookieJar, Redirect), AppError> {
+    let jar = validate_csrf_state(jar, params.state.as_deref())?;
 
     let client = BasicClient::new(ClientId::new(state.config.discord_client_id.clone()))
         .set_client_secret(ClientSecret::new(state.config.discord_client_secret.clone()))
@@ -161,4 +165,60 @@ pub async fn discord_callback(
     // The JWT is transmitted securely via HTTP-only cookie, not in URL
     let redirect_url = format!("{}/auth/discord/callback", state.config.frontend_url);
     Ok((jar, Redirect::temporary(&redirect_url)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_csrf_state;
+    use crate::error::AppError;
+    use axum_extra::extract::cookie::{Cookie, Key, PrivateCookieJar};
+
+    fn new_private_jar() -> PrivateCookieJar {
+        PrivateCookieJar::new(Key::generate())
+    }
+
+    fn jar_with_csrf(value: &str) -> PrivateCookieJar {
+        new_private_jar().add(Cookie::new("oauth_csrf", value.to_string()))
+    }
+
+    #[test]
+    fn validate_csrf_state_rejects_missing_csrf_cookie() {
+        let err = validate_csrf_state(new_private_jar(), Some("state-value"))
+            .expect_err("missing CSRF cookie should fail");
+
+        match err {
+            AppError::Auth(msg) => assert_eq!(msg, "Missing CSRF cookie"),
+            other => panic!("expected auth error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_csrf_state_rejects_missing_state_parameter() {
+        let err = validate_csrf_state(jar_with_csrf("expected-state"), None)
+            .expect_err("missing state should fail");
+
+        match err {
+            AppError::Auth(msg) => assert_eq!(msg, "Missing state parameter"),
+            other => panic!("expected auth error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_csrf_state_rejects_state_mismatch() {
+        let err = validate_csrf_state(jar_with_csrf("expected-state"), Some("different-state"))
+            .expect_err("mismatched state should fail");
+
+        match err {
+            AppError::Auth(msg) => assert_eq!(msg, "CSRF token mismatch"),
+            other => panic!("expected auth error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_csrf_state_accepts_match_and_consumes_cookie() {
+        let jar = validate_csrf_state(jar_with_csrf("expected-state"), Some("expected-state"))
+            .expect("matching state should pass");
+
+        assert!(jar.get("oauth_csrf").is_none());
+    }
 }
