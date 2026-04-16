@@ -50,7 +50,13 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let config = Config::from_env();
+    let config = match Config::from_env() {
+        Ok(config) => config,
+        Err(err) => {
+            tracing::error!("Invalid configuration: {err:#}");
+            std::process::exit(1);
+        }
+    };
 
     let db = db::connect(&config.database_url)
         .await
@@ -82,12 +88,7 @@ async fn main() {
     };
 
     let cors = CorsLayer::new()
-        .allow_origin(
-            config
-                .frontend_url
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-        )
+        .allow_origin(config.frontend_origin.clone())
         .allow_methods(Any)
         .allow_headers(Any)
         .allow_credentials(true);
