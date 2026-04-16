@@ -113,7 +113,7 @@ export class RegisterComponent {
     this.authService.register(this.username, this.password, this.email || undefined).subscribe({
       next: () => this.router.navigate(['/dashboard']),
       error: (err) => {
-        this.error = err.error?.error || 'Registration failed';
+        this.error = this.getErrorMessage(err);
         this.loading = false;
       }
     });
@@ -121,5 +121,25 @@ export class RegisterComponent {
 
   loginWithDiscord(): void {
     this.authService.loginWithDiscord();
+  }
+
+  private getErrorMessage(err: any): string {
+    // Check for new error response format with code field
+    if (err.error?.code) {
+      switch (err.error.code) {
+        case 'CONFLICT_USERNAME':
+          return 'Username already taken';
+        case 'CONFLICT_EMAIL':
+          return 'Email already in use';
+        case 'BAD_REQUEST':
+          return err.error?.error || 'Invalid input';
+        case 'INVALID_CREDENTIALS':
+          return 'Registration failed';
+        default:
+          return err.error?.error || 'Registration failed';
+      }
+    }
+    // Fallback to error message if no code field
+    return err.error?.error || 'Registration failed';
   }
 }

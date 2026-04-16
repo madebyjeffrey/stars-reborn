@@ -1,5 +1,4 @@
 import { Component, OnInit, inject } from '@angular/core';
-import { ActivatedRoute } from '@angular/router';
 import { AuthService } from '../../../core/auth.service';
 
 @Component({
@@ -9,13 +8,11 @@ import { AuthService } from '../../../core/auth.service';
   styles: [`:host { display: block; min-height: 100vh; background: #0f0f1a; }`]
 })
 export class DiscordCallbackComponent implements OnInit {
-  private route = inject(ActivatedRoute);
   private authService = inject(AuthService);
 
   ngOnInit(): void {
-    // The JWT token is transmitted via HTTP-only cookie from the backend,
-    // not in the URL query parameters (which would leak via history, referrers, logs).
-    // Just fetch the current user to verify authentication and establish the session.
+    // The backend has set the refresh_token in an HTTP-only cookie.
+    // Now we need to exchange it for an access token by calling /api/auth/refresh.
     this.authService.handleDiscordCallback();
   }
 }

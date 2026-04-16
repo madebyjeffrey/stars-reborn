@@ -108,7 +108,7 @@ export class LoginComponent {
     this.authService.login(this.username, this.password).subscribe({
       next: () => this.router.navigate(['/dashboard']),
       error: (err) => {
-        this.error = err.error?.error || 'Login failed';
+        this.error = this.getErrorMessage(err);
         this.loading = false;
       }
     });
@@ -116,5 +116,27 @@ export class LoginComponent {
 
   loginWithDiscord(): void {
     this.authService.loginWithDiscord();
+  }
+
+  private getErrorMessage(err: any): string {
+    // Check for new error response format with code field
+    if (err.error?.code) {
+      switch (err.error.code) {
+        case 'INVALID_CREDENTIALS':
+          return 'Invalid username or password';
+        case 'CONFLICT_USERNAME':
+          return 'Username already taken';
+        case 'CONFLICT_EMAIL':
+          return 'Email already in use';
+        case 'TOKEN_EXPIRED':
+          return 'Your session has expired, please login again';
+        case 'UNAUTHORIZED':
+          return 'Authentication failed';
+        default:
+          return err.error?.error || 'Login failed';
+      }
+    }
+    // Fallback to error message if no code field
+    return err.error?.error || 'Login failed';
   }
 }
