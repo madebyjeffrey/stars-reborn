@@ -1,5 +1,4 @@
 use axum::{
-    async_trait,
     extract::FromRequestParts,
     http::request::Parts,
     RequestPartsExt,
@@ -27,7 +26,6 @@ pub struct AuthUser {
     pub claims: Claims,
 }
 
-#[async_trait]
 impl FromRequestParts<AppState> for AuthUser {
     type Rejection = AppError;
 

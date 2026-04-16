@@ -4,7 +4,6 @@ use axum::{
     Json,
 };
 use chrono::Utc;
-use rand::RngCore;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -66,9 +65,7 @@ pub async fn create_token(
     auth_user: AuthUser,
     Json(req): Json<CreateTokenRequest>,
 ) -> Result<(StatusCode, Json<TokenResponse>), AppError> {
-    let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    let token_str = hex::encode(bytes);
+    let token_str = hex::encode(rand::random::<[u8; 32]>());
 
     let now = Utc::now().fixed_offset();
     let token = model::ActiveModel {

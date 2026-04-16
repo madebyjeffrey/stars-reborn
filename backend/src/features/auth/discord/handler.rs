@@ -5,8 +5,8 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, PrivateCookieJar, SameSite};
 use chrono::Utc;
 use oauth2::{
-    basic::BasicClient, reqwest::async_http_client, AuthUrl, AuthorizationCode, ClientId,
-    ClientSecret, CsrfToken, RedirectUrl, Scope, TokenResponse, TokenUrl,
+    basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
+    RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::Deserialize;
@@ -17,18 +17,6 @@ use crate::{
     features::users::model::{self, Entity as UserEntity},
     AppState,
 };
-
-fn build_oauth_client(state: &AppState) -> BasicClient {
-    BasicClient::new(
-        ClientId::new(state.config.discord_client_id.clone()),
-        Some(ClientSecret::new(
-            state.config.discord_client_secret.clone(),
-        )),
-        AuthUrl::new("https://discord.com/api/oauth2/authorize".to_string()).unwrap(),
-        Some(TokenUrl::new("https://discord.com/api/oauth2/token".to_string()).unwrap()),
-    )
-    .set_redirect_uri(RedirectUrl::new(state.config.discord_redirect_url.clone()).unwrap())
-}
 
 fn create_jwt(user_id: &str, secret: &str) -> Result<String, jsonwebtoken::errors::Error> {
     use jsonwebtoken::{encode, EncodingKey, Header};
@@ -59,7 +47,11 @@ pub async fn discord_login(
     State(state): State<AppState>,
     jar: PrivateCookieJar,
 ) -> (PrivateCookieJar, Redirect) {
-    let client = build_oauth_client(&state);
+    let client = BasicClient::new(ClientId::new(state.config.discord_client_id.clone()))
+        .set_client_secret(ClientSecret::new(state.config.discord_client_secret.clone()))
+        .set_auth_uri(AuthUrl::new("https://discord.com/api/oauth2/authorize".to_string()).unwrap())
+        .set_token_uri(TokenUrl::new("https://discord.com/api/oauth2/token".to_string()).unwrap())
+        .set_redirect_uri(RedirectUrl::new(state.config.discord_redirect_url.clone()).unwrap());
     let (auth_url, csrf_token) = client
         .authorize_url(CsrfToken::new_random)
         .add_scope(Scope::new("identify".to_string()))
@@ -114,17 +106,25 @@ pub async fn discord_callback(
     // Consume the CSRF cookie so it cannot be replayed
     let jar = jar.remove(Cookie::from("oauth_csrf"));
 
-    let client = build_oauth_client(&state);
+    let client = BasicClient::new(ClientId::new(state.config.discord_client_id.clone()))
+        .set_client_secret(ClientSecret::new(state.config.discord_client_secret.clone()))
+        .set_auth_uri(AuthUrl::new("https://discord.com/api/oauth2/authorize".to_string()).unwrap())
+        .set_token_uri(TokenUrl::new("https://discord.com/api/oauth2/token".to_string()).unwrap())
+        .set_redirect_uri(RedirectUrl::new(state.config.discord_redirect_url.clone()).unwrap());
+    let http_client = oauth2::reqwest::ClientBuilder::new()
+        .redirect(oauth2::reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to build OAuth HTTP client: {}", e)))?;
 
     let token_result = client
         .exchange_code(AuthorizationCode::new(params.code))
-        .request_async(async_http_client)
+        .request_async(&http_client)
         .await
         .map_err(|e| AppError::Auth(format!("OAuth token exchange failed: {}", e)))?;
 
     let access_token = token_result.access_token().secret().clone();
 
-    let discord_user: DiscordUser = reqwest::Client::new()
+    let discord_user: DiscordUser = ::reqwest::Client::new()
         .get("https://discord.com/api/users/@me")
         .bearer_auth(&access_token)
         .send()
