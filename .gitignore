@@ -15,3 +15,5 @@ backend/.env
 .idea/
 .vscode/
 *.swp
+/dev/certs/stars.localhost+3.pem
+/dev/certs/stars.localhost+3-key.pem
