@@ -10,6 +10,8 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use cookie::Key;
+use axum::extract::FromRef;
 use config::Config;
 use features::{
     api_tokens::routes as token_routes,
@@ -21,6 +23,13 @@ use features::{
 pub struct AppState {
     pub db: DatabaseConnection,
     pub config: Config,
+    pub cookie_key: Key,
+}
+
+impl FromRef<AppState> for Key {
+    fn from_ref(state: &AppState) -> Self {
+        state.cookie_key.clone()
+    }
 }
 
 async fn health_check() -> Json<serde_json::Value> {
@@ -51,6 +60,7 @@ async fn main() {
 
     let state = AppState {
         db,
+        cookie_key: Key::derive_from(config.jwt_secret.as_bytes()),
         config: config.clone(),
     };
 

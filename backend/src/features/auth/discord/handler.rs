@@ -2,6 +2,7 @@ use axum::{
     extract::{Query, State},
     response::Redirect,
 };
+use axum_extra::extract::cookie::{Cookie, PrivateCookieJar, SameSite};
 use chrono::Utc;
 use oauth2::{
     basic::BasicClient, reqwest::async_http_client, AuthUrl, AuthorizationCode, ClientId,
@@ -54,15 +55,26 @@ fn create_jwt(user_id: &str, secret: &str) -> Result<String, jsonwebtoken::error
     )
 }
 
-pub async fn discord_login(State(state): State<AppState>) -> Redirect {
+pub async fn discord_login(
+    State(state): State<AppState>,
+    jar: PrivateCookieJar,
+) -> (PrivateCookieJar, Redirect) {
     let client = build_oauth_client(&state);
-    let (auth_url, _csrf_token) = client
+    let (auth_url, csrf_token) = client
         .authorize_url(CsrfToken::new_random)
         .add_scope(Scope::new("identify".to_string()))
         .add_scope(Scope::new("email".to_string()))
         .url();
 
-    Redirect::temporary(auth_url.as_str())
+    let mut csrf_cookie = Cookie::new("oauth_csrf", csrf_token.secret().clone());
+    csrf_cookie.set_http_only(true);
+    csrf_cookie.set_secure(true);
+    csrf_cookie.set_same_site(SameSite::Lax);
+    csrf_cookie.set_path("/");
+    csrf_cookie.set_max_age(time::Duration::minutes(10));
+
+    let jar = jar.add(csrf_cookie);
+    (jar, Redirect::temporary(auth_url.as_str()))
 }
 
 #[derive(Deserialize)]
@@ -81,8 +93,27 @@ struct DiscordUser {
 
 pub async fn discord_callback(
     State(state): State<AppState>,
+    jar: PrivateCookieJar,
     Query(params): Query<CallbackQuery>,
-) -> Result<Redirect, AppError> {
+) -> Result<(PrivateCookieJar, Redirect), AppError> {
+    // Validate CSRF token before doing anything else
+    let csrf_cookie = jar
+        .get("oauth_csrf")
+        .ok_or_else(|| AppError::Auth("Missing CSRF cookie".to_string()))?;
+
+    let expected = csrf_cookie.value().to_string();
+    let provided = params
+        .state
+        .as_deref()
+        .ok_or_else(|| AppError::Auth("Missing state parameter".to_string()))?;
+
+    if expected != provided {
+        return Err(AppError::Auth("CSRF token mismatch".to_string()));
+    }
+
+    // Consume the CSRF cookie so it cannot be replayed
+    let jar = jar.remove(Cookie::from("oauth_csrf"));
+
     let client = build_oauth_client(&state);
 
     let token_result = client
@@ -134,5 +165,5 @@ pub async fn discord_callback(
         "{}/auth/discord/callback?token={}",
         state.config.frontend_url, token
     );
-    Ok(Redirect::temporary(&redirect_url))
+    Ok((jar, Redirect::temporary(&redirect_url)))
 }
