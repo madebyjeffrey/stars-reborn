@@ -72,7 +72,8 @@ async fn main() {
                 .unwrap(),
         )
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .allow_credentials(true);
 
     let app = Router::new()
         .route("/api/health", get(health_check))

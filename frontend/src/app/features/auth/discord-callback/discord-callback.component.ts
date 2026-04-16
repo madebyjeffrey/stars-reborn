@@ -13,9 +13,9 @@ export class DiscordCallbackComponent implements OnInit {
   private authService = inject(AuthService);
 
   ngOnInit(): void {
-    const token = this.route.snapshot.queryParamMap.get('token');
-    if (token) {
-      this.authService.handleDiscordCallback(token);
-    }
+    // The JWT token is transmitted via HTTP-only cookie from the backend,
+    // not in the URL query parameters (which would leak via history, referrers, logs).
+    // Just fetch the current user to verify authentication and establish the session.
+    this.authService.handleDiscordCallback();
   }
 }

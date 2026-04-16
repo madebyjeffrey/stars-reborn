@@ -1,7 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Router } from '@angular/router';
-import { Observable, tap } from 'rxjs';
+import { Observable, tap, catchError } from 'rxjs';
 import { environment } from '../../environments/environment';
 
 export interface User {
@@ -28,20 +28,23 @@ export class AuthService {
   }
 
   private loadUser(): void {
-    const token = this.getToken();
-    if (token) {
-      this.fetchCurrentUser().subscribe({
-        error: () => this.logout()
-      });
-    }
+    // Try to fetch the current user; if successful, we're authenticated.
+    // The JWT token is stored in HTTP-only cookie set by the backend.
+    this.fetchCurrentUser().subscribe({
+      error: () => this.logout()
+    });
   }
 
   getToken(): string | null {
-    return localStorage.getItem(this.TOKEN_KEY);
+    // Token is stored in HTTP-only cookie on the backend.
+    // Frontend cannot access it directly (which is the security goal).
+    // Credentials are sent automatically with fetch/http calls via withCredentials.
+    return localStorage.getItem(this.TOKEN_KEY) || null;
   }
 
   isAuthenticated(): boolean {
-    return !!this.getToken();
+    // Check if we have a current user (fetched successfully)
+    return !!this.currentUser();
   }
 
   login(username: string, password: string): Observable<AuthResponse> {
@@ -60,14 +63,26 @@ export class AuthService {
     window.location.href = `${environment.apiUrl}/auth/discord`;
   }
 
-  handleDiscordCallback(token: string): void {
-    localStorage.setItem(this.TOKEN_KEY, token);
-    this.fetchCurrentUser().subscribe(() => {
-      this.router.navigate(['/dashboard']);
+  handleDiscordCallback(): void {
+    // The backend has set the JWT in an HTTP-only cookie.
+    // Fetch the current user to validate the session and load user data.
+    // Store a flag in localStorage indicating we're authenticated.
+    this.fetchCurrentUser().subscribe({
+      next: () => {
+        // Set a simple flag to indicate we're authenticated
+        localStorage.setItem(this.TOKEN_KEY, 'authenticated');
+        this.router.navigate(['/dashboard']);
+      },
+      error: () => {
+        // OAuth flow failed or token is invalid
+        this.logout();
+      }
     });
   }
 
   private handleAuth(res: AuthResponse): void {
+    // For traditional login/register, store the token in localStorage
+    // (backend may also set HTTP-only cookie for consistency)
     localStorage.setItem(this.TOKEN_KEY, res.token);
     this.currentUser.set(res.user);
   }

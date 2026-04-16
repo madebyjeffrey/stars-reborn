@@ -161,9 +161,18 @@ pub async fn discord_callback(
     let token = create_jwt(&user.id.to_string(), &state.config.jwt_secret)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create JWT: {}", e)))?;
 
-    let redirect_url = format!(
-        "{}/auth/discord/callback?token={}",
-        state.config.frontend_url, token
-    );
+    // Set JWT as HTTP-only cookie instead of query parameter to prevent token leakage
+    let mut auth_cookie = Cookie::new("auth_token", token);
+    auth_cookie.set_http_only(true);
+    auth_cookie.set_secure(true);
+    auth_cookie.set_same_site(SameSite::Lax);
+    auth_cookie.set_path("/");
+    auth_cookie.set_max_age(time::Duration::days(7));
+
+    let jar = jar.add(auth_cookie);
+
+    // Redirect to frontend callback page with just a success indicator
+    // The JWT is transmitted securely via HTTP-only cookie, not in URL
+    let redirect_url = format!("{}/auth/discord/callback", state.config.frontend_url);
     Ok((jar, Redirect::temporary(&redirect_url)))
 }
