@@ -1,6 +1,6 @@
 use chrono::Utc;
 use jsonwebtoken::{
-    decode, encode, Algorithm, DecodingKey, EncodingKey, Header, TokenData, Validation,
+    decode, encode as jwt_encode, Algorithm, DecodingKey, EncodingKey, Header, TokenData, Validation,
 };
 use serde::{Deserialize, Serialize};
 
@@ -90,9 +90,20 @@ pub fn issue_access_token(
 ) -> Result<String, jsonwebtoken::errors::Error> {
     let claims = Claims::for_user(user_id, Utc::now().timestamp() as usize);
 
-    encode(
+    jwt_encode(
         &Header::new(ACCESS_TOKEN_ALGORITHM),
         &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+}
+
+pub fn encode(
+    claims: &Claims,
+    secret: &str,
+) -> Result<String, jsonwebtoken::errors::Error> {
+    jwt_encode(
+        &Header::new(ACCESS_TOKEN_ALGORITHM),
+        claims,
         &EncodingKey::from_secret(secret.as_bytes()),
     )
 }

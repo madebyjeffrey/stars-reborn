@@ -15,10 +15,12 @@ use uuid::Uuid;
 use crate::{
     error::AppError,
     features::users::model::{self, Entity as UserEntity},
-    jwt::issue_access_token,
+    features::auth::refresh_sessions::model::{self as refresh_model},
+    jwt::{issue_access_token, Claims},
     AppState,
 };
 
+use time;
 
 fn parse_discord_redirect_url(value: &str) -> Result<RedirectUrl, AppError> {
     RedirectUrl::new(value.to_string()).map_err(|e| {
@@ -72,6 +74,44 @@ struct DiscordUser {
     username: String,
     avatar: Option<String>,
     email: Option<String>,
+}
+
+async fn create_refresh_session(
+    db: &sea_orm::DatabaseConnection,
+    user_id: Uuid,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> Result<Claims, AppError> {
+    let jti = Uuid::new_v4().to_string();
+    let expires_at = now + chrono::Duration::days(30);
+    let issued_at = now.timestamp() as usize;
+
+    let session = refresh_model::ActiveModel {
+        jti: Set(jti.clone()),
+        user_id: Set(user_id),
+        expires_at: Set(expires_at),
+        revoked_at: Set(None),
+        replaced_by: Set(None),
+        created_at: Set(now),
+        last_used_at: Set(None),
+    };
+
+    session.insert(db).await?;
+
+    let refresh_claims = Claims::for_refresh(user_id.to_string(), jti, issued_at);
+    Ok(refresh_claims)
+}
+
+fn issue_refresh_cookie(
+    refresh_token: &str,
+    cookie_secure: bool,
+) -> Cookie<'static> {
+    let mut cookie = Cookie::new("refresh_token", refresh_token.to_string());
+    cookie.set_http_only(true);
+    cookie.set_secure(cookie_secure);
+    cookie.set_same_site(SameSite::Lax);
+    cookie.set_path("/");
+    cookie.set_max_age(time::Duration::days(30));
+    cookie
 }
 
 fn apply_discord_profile_updates(
@@ -207,21 +247,24 @@ pub async fn discord_callback(
 
     let user = upsert_discord_user(&state.db, discord_user).await?;
 
-    let token = issue_access_token(&user.id.to_string(), &state.config.jwt_secret)
+    let now = Utc::now().fixed_offset();
+    let refresh_claims = create_refresh_session(&state.db, user.id, now).await?;
+
+    let refresh_token = crate::jwt::encode(
+        &refresh_claims,
+        &state.config.jwt_secret,
+    )
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create refresh token: {}", e)))?;
+
+    let _access_token = issue_access_token(&user.id.to_string(), &state.config.jwt_secret)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create JWT: {}", e)))?;
 
-    // Set JWT as HTTP-only cookie instead of query parameter to prevent token leakage
-    let mut auth_cookie = Cookie::new("auth_token", token);
-    auth_cookie.set_http_only(true);
-    auth_cookie.set_secure(state.config.cookie_secure);
-    auth_cookie.set_same_site(SameSite::Lax);
-    auth_cookie.set_path("/");
-    auth_cookie.set_max_age(time::Duration::days(7));
-
-    let jar = jar.add(auth_cookie);
+    // Set refresh token in HTTP-only cookie (access token not stored, will be requested via /api/auth/refresh)
+    let refresh_cookie = issue_refresh_cookie(&refresh_token, state.config.cookie_secure);
+    let jar = jar.add(refresh_cookie);
 
     // Redirect to frontend callback page with just a success indicator
-    // The JWT is transmitted securely via HTTP-only cookie, not in URL
+    // Frontend will use stored refresh cookie to obtain access token via POST /api/auth/refresh
     let redirect_url = format!("{}/auth/discord/callback", state.config.frontend_url);
     Ok((jar, Redirect::temporary(&redirect_url)))
 }
