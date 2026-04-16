@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::{
     error::AppError,
     features::api_tokens::{hash_api_token, model as api_token_model},
-    jwt::{decode_access_token, Claims},
+    jwt::{decode_access_token, Claims, TokenType},
     AppState,
 };
 
@@ -38,6 +38,13 @@ impl FromRequestParts<AppState> for AuthUser {
         let token_data = decode_access_token(bearer_token, &state.config.jwt_secret);
 
         if let Ok(token_data) = token_data {
+            // Accept both access and refresh tokens from middleware
+            if !matches!(
+                token_data.claims.typ,
+                Some(TokenType::Access) | Some(TokenType::Refresh)
+            ) {
+                return Err(AppError::Unauthorized);
+            }
             let user_id =
                 Uuid::parse_str(&token_data.claims.sub).map_err(|_| AppError::Unauthorized)?;
             return Ok(AuthUser {

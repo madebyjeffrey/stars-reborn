@@ -16,7 +16,10 @@ use axum::extract::FromRef;
 use config::Config;
 use features::{
     api_tokens::routes as token_routes,
-    auth::{discord::routes as discord_routes, local::routes as local_routes},
+    auth::{
+        discord::routes as discord_routes, local::routes as local_routes,
+        refresh_sessions::routes as refresh_routes,
+    },
     users::routes as user_routes,
 };
 
@@ -98,6 +101,7 @@ async fn main() {
         .route("/api/health", get(health_check))
         .nest("/api/auth", local_routes::routes())
         .nest("/api/auth/discord", discord_routes::routes())
+        .nest("/api/auth", refresh_routes::routes())
         .nest("/api/users", user_routes::routes())
         .nest("/api/tokens", token_routes::routes())
         .layer(cors)
