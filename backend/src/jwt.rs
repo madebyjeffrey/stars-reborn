@@ -29,6 +29,7 @@ pub struct Claims {
 }
 
 impl Claims {
+    #[allow(dead_code)]
     pub fn new(user_id: impl Into<String>, exp: usize, issued_at: usize) -> Self {
         Self {
             sub: user_id.into(),
@@ -49,6 +50,7 @@ impl Claims {
         }
     }
 
+    #[allow(dead_code)]
     pub fn for_access_with_jti(
         user_id: impl Into<String>,
         jti: String,

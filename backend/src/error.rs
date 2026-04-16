@@ -11,8 +11,6 @@ use tracing::error;
 pub enum ErrorCode {
     #[serde(rename = "UNAUTHORIZED")]
     Unauthorized,
-    #[serde(rename = "TOKEN_EXPIRED")]
-    TokenExpired,
     #[serde(rename = "INVALID_CREDENTIALS")]
     InvalidCredentials,
     #[serde(rename = "NOT_FOUND")]

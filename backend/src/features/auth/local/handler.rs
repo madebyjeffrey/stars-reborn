@@ -8,13 +8,12 @@ use uuid::Uuid;
 
 use crate::{
     error::AppError,
-    features::users::model::{self, Entity as UserEntity},
+    features::users::{dto::UserResponse, model::{self, Entity as UserEntity}},
     features::auth::refresh_sessions::model::{self as refresh_model},
     jwt::{issue_access_token, Claims},
     AppState,
 };
 
-use super::super::super::users::handler::UserResponse;
 use super::password::{hash_password, verify_password};
 
 async fn create_refresh_session(
