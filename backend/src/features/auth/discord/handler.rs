@@ -20,15 +20,29 @@ use crate::{
 };
 
 
+fn parse_discord_redirect_url(value: &str) -> Result<RedirectUrl, AppError> {
+    RedirectUrl::new(value.to_string()).map_err(|e| {
+        AppError::Internal(anyhow::anyhow!(
+            "Invalid DISCORD_REDIRECT_URL '{}': {e}",
+            value
+        ))
+    })
+}
+
 pub async fn discord_login(
     State(state): State<AppState>,
     jar: PrivateCookieJar,
-) -> (PrivateCookieJar, Redirect) {
+) -> Result<(PrivateCookieJar, Redirect), AppError> {
+    let redirect_url = parse_discord_redirect_url(&state.config.discord_redirect_url)?;
+    let auth_url = AuthUrl::new("https://discord.com/api/oauth2/authorize".to_string())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Invalid Discord auth URL: {e}")))?;
+    let token_url = TokenUrl::new("https://discord.com/api/oauth2/token".to_string())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Invalid Discord token URL: {e}")))?;
     let client = BasicClient::new(ClientId::new(state.config.discord_client_id.clone()))
         .set_client_secret(ClientSecret::new(state.config.discord_client_secret.clone()))
-        .set_auth_uri(AuthUrl::new("https://discord.com/api/oauth2/authorize".to_string()).unwrap())
-        .set_token_uri(TokenUrl::new("https://discord.com/api/oauth2/token".to_string()).unwrap())
-        .set_redirect_uri(RedirectUrl::new(state.config.discord_redirect_url.clone()).unwrap());
+        .set_auth_uri(auth_url)
+        .set_token_uri(token_url)
+        .set_redirect_uri(redirect_url);
     let (auth_url, csrf_token) = client
         .authorize_url(CsrfToken::new_random)
         .add_scope(Scope::new("identify".to_string()))
@@ -37,13 +51,13 @@ pub async fn discord_login(
 
     let mut csrf_cookie = Cookie::new("oauth_csrf", csrf_token.secret().clone());
     csrf_cookie.set_http_only(true);
-    csrf_cookie.set_secure(true);
+    csrf_cookie.set_secure(state.config.cookie_secure);
     csrf_cookie.set_same_site(SameSite::Lax);
     csrf_cookie.set_path("/");
     csrf_cookie.set_max_age(time::Duration::minutes(10));
 
     let jar = jar.add(csrf_cookie);
-    (jar, Redirect::temporary(auth_url.as_str()))
+    Ok((jar, Redirect::temporary(auth_url.as_str())))
 }
 
 #[derive(Deserialize)]
@@ -158,11 +172,16 @@ pub async fn discord_callback(
 ) -> Result<(PrivateCookieJar, Redirect), AppError> {
     let jar = validate_csrf_state(jar, params.state.as_deref())?;
 
+    let redirect_url = parse_discord_redirect_url(&state.config.discord_redirect_url)?;
+    let auth_url = AuthUrl::new("https://discord.com/api/oauth2/authorize".to_string())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Invalid Discord auth URL: {e}")))?;
+    let token_url = TokenUrl::new("https://discord.com/api/oauth2/token".to_string())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Invalid Discord token URL: {e}")))?;
     let client = BasicClient::new(ClientId::new(state.config.discord_client_id.clone()))
         .set_client_secret(ClientSecret::new(state.config.discord_client_secret.clone()))
-        .set_auth_uri(AuthUrl::new("https://discord.com/api/oauth2/authorize".to_string()).unwrap())
-        .set_token_uri(TokenUrl::new("https://discord.com/api/oauth2/token".to_string()).unwrap())
-        .set_redirect_uri(RedirectUrl::new(state.config.discord_redirect_url.clone()).unwrap());
+        .set_auth_uri(auth_url)
+        .set_token_uri(token_url)
+        .set_redirect_uri(redirect_url);
     let http_client = oauth2::reqwest::ClientBuilder::new()
         .redirect(oauth2::reqwest::redirect::Policy::none())
         .build()
@@ -194,7 +213,7 @@ pub async fn discord_callback(
     // Set JWT as HTTP-only cookie instead of query parameter to prevent token leakage
     let mut auth_cookie = Cookie::new("auth_token", token);
     auth_cookie.set_http_only(true);
-    auth_cookie.set_secure(true);
+    auth_cookie.set_secure(state.config.cookie_secure);
     auth_cookie.set_same_site(SameSite::Lax);
     auth_cookie.set_path("/");
     auth_cookie.set_max_age(time::Duration::days(7));
@@ -209,7 +228,7 @@ pub async fn discord_callback(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_discord_profile_updates, validate_csrf_state};
+    use super::{apply_discord_profile_updates, parse_discord_redirect_url, validate_csrf_state};
     use crate::error::AppError;
     use crate::features::users::model;
     use axum_extra::extract::cookie::{Cookie, Key, PrivateCookieJar};
@@ -325,5 +344,17 @@ mod tests {
             ActiveValue::Set(Some("new_avatar".to_string()))
         );
         assert_eq!(active.updated_at, ActiveValue::Set(new_updated_at));
+    }
+
+    #[test]
+    fn parse_discord_redirect_url_rejects_invalid_value_without_panicking() {
+        let err = parse_discord_redirect_url("not a url")
+            .expect_err("invalid redirect URL should fail");
+        match err {
+            AppError::Internal(e) => {
+                assert!(e.to_string().contains("Invalid DISCORD_REDIRECT_URL"));
+            }
+            other => panic!("expected internal error, got {other:?}"),
+        }
     }
 }
